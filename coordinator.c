@@ -1,3 +1,65 @@
+/******************************************************************************
+  Filename:       GenericApp.c
+  Revised:        $Date: 2012-03-07 01:04:58 -0800 (Wed, 07 Mar 2012) $
+  Revision:       $Revision: 29656 $
+
+  Description:    Generic Application (no Profile).
+
+
+  Copyright 2004-2012 Texas Instruments Incorporated. All rights reserved.
+
+  IMPORTANT: Your use of this Software is limited to those specific rights
+  granted under the terms of a software license agreement between the user
+  who downloaded the software, his/her employer (which must be your employer)
+  and Texas Instruments Incorporated (the "License"). You may not use this
+  Software unless you agree to abide by the terms of the License. The License
+  limits your use, and you acknowledge, that the Software may not be modified,
+  copied or distributed unless embedded on a Texas Instruments microcontroller
+  or used solely and exclusively in conjunction with a Texas Instruments radio
+  frequency transceiver, which is integrated into your product. Other than for
+  the foregoing purpose, you may not use, reproduce, copy, prepare derivative
+  works of, modify, distribute, perform, display or sell this Software and/or
+  its documentation for any purpose.
+
+  YOU FURTHER ACKNOWLEDGE AND AGREE THAT THE SOFTWARE AND DOCUMENTATION ARE
+  PROVIDED 揂S IS?WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+  INCLUDING WITHOUT LIMITATION, ANY WARRANTY OF MERCHANTABILITY, TITLE,
+  NON-INFRINGEMENT AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL
+  TEXAS INSTRUMENTS OR ITS LICENSORS BE LIABLE OR OBLIGATED UNDER CONTRACT,
+  NEGLIGENCE, STRICT LIABILITY, CONTRIBUTION, BREACH OF WARRANTY, OR OTHER
+  LEGAL EQUITABLE THEORY ANY DIRECT OR INDIRECT DAMAGES OR EXPENSES
+  INCLUDING BUT NOT LIMITED TO ANY INCIDENTAL, SPECIAL, INDIRECT, PUNITIVE
+  OR CONSEQUENTIAL DAMAGES, LOST PROFITS OR LOST DATA, COST OF PROCUREMENT
+  OF SUBSTITUTE GOODS, TECHNOLOGY, SERVICES, OR ANY CLAIMS BY THIRD PARTIES
+  (INCLUDING BUT NOT LIMITED TO ANY DEFENSE THEREOF), OR OTHER SIMILAR COSTS.
+
+  Should you have any questions regarding your right to use this Software,
+  contact Texas Instruments Incorporated at www.TI.com.
+******************************************************************************/
+
+/*********************************************************************
+  This application isn't intended to do anything useful, it is
+  intended to be a simple example of an application's structure.
+
+  This application sends "Hello World" to another "Generic"
+  application every 5 seconds.  The application will also
+  receives "Hello World" packets.
+
+  The "Hello World" messages are sent/received as MSG type message.
+
+  This applications doesn't have a profile, so it handles everything
+  directly - itself.
+
+  Key control:
+    SW1:
+    SW2:  initiates end device binding
+    SW3:
+    SW4:  initiates a match description request
+*********************************************************************/
+
+/*********************************************************************
+ * INCLUDES
+ */
 #include "OSAL.h"
 #include "OSAL_Timers.h"
 #include "AF.h"
@@ -436,6 +498,61 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
         }
       }
       break;
+      
+      case PHOTOCELL_CLUSTERID:
+      {
+        zclReadRsp_t *readRsp = (zclReadRsp_t *)inMsg->asdu;
+        if (readRsp->numAttributes == 1 && readRsp->attrList[0].status == ZCL_STATUS_SUCCESS)
+        {
+          uint16_t photocell_value = BUILD_UINT16(readRsp->attrList[0].data[1], readRsp->attrList[0].data[0]);
+
+          // 根据光照强度自动控制 LED 灯
+          if (GenericApp_Mode == AUTO_MODE)
+          {
+            if (photocell_value == 0)
+            {
+              // 光照弱，开启所有灯
+              P1 |= BV(0);
+              P1 |= BV(1);
+            }
+            else if (photocell_value == 1)
+            {
+              // 光照强，关闭所有灯
+              P1 &= ~BV(0);
+              P1 &= ~BV(1);
+            }
+          }
+
+          // 如果当前节点为协调器并且检测到运动，控制自身 LED 灯
+          if (GenericApp_MyEndpoint == COORDINATOR_ENDPOINT && motion_value == 1)
+          {
+            P1 ^= BV(2); // LED2 取反
+          }
+        }
+      }
+      break;
+    case OCCUPANCY_CLUSTERID:
+      {
+        zclReadRsp_t *readRsp = (zclReadRsp_t *)inMsg->asdu;
+        if (readRsp->numAttributes == 1 && readRsp->attrList[0].status == ZCL_STATUS_SUCCESS)
+        {
+          uint8_t occupancy_value = readRsp->attrList[0].data[0];
+
+          // 根据运动状态控制 LED 灯
+          if (GenericApp_Mode == MANUAL_MODE)
+          {
+            if (occupancy_value == 1)
+            {
+              P1 |= BV(2); // LED2 开
+            }
+            else if (occupancy_value == 0)
+            {
+              P1 &= ~BV(2); // LED2 关
+            }
+          }
+        }
+      }
+      break;
   }
 }
 
@@ -453,7 +570,7 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
  *
  * @return  none
  */
-// 定义手动模式变量
+// 定义自动模式变量
 static uint8_t manualMode = 0;
 // 定义变量ledState
 static uint8_t ledState = LED_OFF;
@@ -468,23 +585,27 @@ void GenericApp_HandleKeys( uint8 shift, uint8 keys )
   switch (keys)
   {
     case HAL_KEY_SW_1:
-      if (manualMode) // 处于手动模式
+      if (manualMode == 1) // 处于手动模式
       {
         // 切换LED灯状态
         if (ledState == LED_OFF)
         {
           ledState = LED_ON;
           HalLedSet(HAL_LED_1, HAL_LED_MODE_ON);
+          HalLedSet(HAL_LED_2, HAL_LED_MODE_ON);
+          HalLedSet(HAL_LED_3, HAL_LED_MODE_ON);
         }
         else
         {
           ledState = LED_OFF;
           HalLedSet(HAL_LED_1, HAL_LED_MODE_OFF);
+          HalLedSet(HAL_LED_2, HAL_LED_MODE_OFF);
+          HalLedSet(HAL_LED_3, HAL_LED_MODE_OFF);
         }
       }
       break;
     case HAL_KEY_SW_2:
-      if (manualMode) // 处于手动模式
+      if (manualMode == 1) // 处于手动模式
       {
         // 切换手动模式和自动模式
         manualMode = 0;
@@ -676,3 +797,6 @@ static void GenericApp_ProcessRtosMessage( void )
   }
 }
 #endif
+
+/*********************************************************************
+ */
