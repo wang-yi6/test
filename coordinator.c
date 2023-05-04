@@ -71,6 +71,9 @@
 #include "DebugTrace.h"
 #include "zcomdef.h"
 #include "delay.h"
+#include "zcl.h"
+#include "zcl_general.h"
+
 
 #if !defined( WIN32 )
   #include "OnBoard.h"
@@ -139,6 +142,7 @@ typedef struct {
 #define KEYS_DISCOVERY_REQ  0x08
 #define LED_OFF 0
 #define LED_ON 1
+#define PIR_CLUSTERID 0x1234
 
 
 
@@ -460,8 +464,10 @@ uint16 GenericApp_ProcessEvent( uint8 task_id, uint16 events )
  *
  * @return  none
  */
+
 static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
 {
+  
   switch ( inMsg->clusterID )
   {
     case End_Device_Bind_rsp:
@@ -498,6 +504,64 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
         }
       }
       break;
+      
+      case PHOTOCELL_CLUSTERID:
+{
+  afIncomingMSGPacket_t *pMsg = (afIncomingMSGPacket_t *)inMsg;
+  uint8 data = 0;
+
+  // get data from message
+  memcpy(&data, pMsg->cmd.Data, sizeof(uint8));
+
+
+  // handle data from photoresistor sensor
+  if (pMsg->srcAddr.addr.shortAddr == NLME_GetShortAddr())
+  {
+    if (data == 0x01) // light level is above threshold
+    {
+      // turn off all LEDs
+      HalLedSet(1, HAL_LED_MODE_OFF);
+      HalLedSet(2, HAL_LED_MODE_OFF);
+      HalLedSet(3, HAL_LED_MODE_OFF);
+    }
+    else if (data == 0x00) // light level is below threshold
+    {
+      // do nothing
+    }
+  }
+  break;
+}
+  case PIR_CLUSTERID:
+    {
+      afIncomingMSGPacket_t *pMsg = (afIncomingMSGPacket_t *)inMsg;
+      uint8 data = 0;
+      
+      // get data from message
+      memcpy(&data, pMsg->cmd.Data, sizeof(uint8));
+      
+      // handle data from PIR sensor
+      if (pMsg->srcAddr.addr.shortAddr == NLME_GetShortAddr())
+      {
+        if (data == 0x01) // motion detected
+        {
+          // turn on all LEDs
+          HalLedSet(1, HAL_LED_MODE_ON);
+          HalLedSet(2, HAL_LED_MODE_ON);
+          HalLedSet(3, HAL_LED_MODE_ON);
+          
+          // send message to other devices
+          uint8 buf[1];
+          buf[0] = 0x03;
+          zcl_SendCommand(1, &GenericApp_DstAddr, ZCL_CLUSTER_ID_GEN_BASIC, buf, sizeof(buf), 0, 0);
+        }
+        else if (data == 0x00) // no motion detected
+        {
+          // do nothing
+        }
+      }
+      break;
+    }
+
   }
 }
 
