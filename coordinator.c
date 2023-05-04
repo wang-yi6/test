@@ -143,7 +143,7 @@ typedef struct {
 #define LED_OFF 0
 #define LED_ON 1
 #define PIR_CLUSTERID 0x1234
-
+#define ZCL_ON_OFF
 
 
 
@@ -465,6 +465,7 @@ uint16 GenericApp_ProcessEvent( uint8 task_id, uint16 events )
  * @return  none
  */
 
+
 static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
 {
   
@@ -533,33 +534,46 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
 }
   case PIR_CLUSTERID:
     {
-      afIncomingMSGPacket_t *pMsg = (afIncomingMSGPacket_t *)inMsg;
-      uint8 data = 0;
-      
-      // get data from message
-      memcpy(&data, pMsg->cmd.Data, sizeof(uint8));
-      
-      // handle data from PIR sensor
-      if (pMsg->srcAddr.addr.shortAddr == NLME_GetShortAddr())
-      {
+       afIncomingMSGPacket_t *pMsg = (afIncomingMSGPacket_t *)inMsg;
+    uint8 data = 0;
+
+    // get data from message
+    memcpy(&data, pMsg->cmd.Data, sizeof(uint8));
+
+    // handle data from PIR sensor
+    if (pMsg->srcAddr.addr.shortAddr == NLME_GetShortAddr())
+    {
         if (data == 0x01) // motion detected
         {
-          // turn on all LEDs
-          HalLedSet(1, HAL_LED_MODE_ON);
-          HalLedSet(2, HAL_LED_MODE_ON);
-          HalLedSet(3, HAL_LED_MODE_ON);
-          
-          // send message to other devices
-          uint8 buf[1];
-          buf[0] = 0x03;
-          zcl_SendCommand(1, &GenericApp_DstAddr, ZCL_CLUSTER_ID_GEN_BASIC, buf, sizeof(buf), 0, 0);
+            // turn on all LEDs
+            HalLedSet(1, HAL_LED_MODE_ON);
+            HalLedSet(2, HAL_LED_MODE_ON);
+            HalLedSet(3, HAL_LED_MODE_ON);
+
+            // send message to other devices
+            afAddrType_t dstAddr;
+            dstAddr.addr.shortAddr = GenericApp_DstAddr.addr.shortAddr;
+            dstAddr.addrMode = (afAddrMode_t)Addr16Bit;
+            dstAddr.endPoint = GENERICAPP_ENDPOINT;
+            dstAddr.panId = 0;
+
+            uint8 buf[1];
+            buf[0] = 0x03;
+
+            AF_DataRequest(&dstAddr, &GenericApp_epDesc,
+                ZCL_CLUSTER_ID_GEN_ON_OFF,
+                1, // numArgs
+                buf, // pArgs
+                &GenericApp_TransID,
+                AF_DISCV_ROUTE,
+                AF_DEFAULT_RADIUS);
         }
         else if (data == 0x00) // no motion detected
         {
-          // do nothing
+            // do nothing
         }
-      }
-      break;
+    }
+    break;
     }
 
   }
