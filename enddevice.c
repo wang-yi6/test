@@ -65,6 +65,11 @@
 #include "ZDApp.h"
 #include "ZDObject.h"
 #include "ZDProfile.h"
+#include "ZComDef.h"
+#include "OSAL_Timers.h"
+#include "delay.h"
+#include "zcl.h"
+#include "zcl_general.h"
 
 #include "GenericApp.h"
 #include "DebugTrace.h"
@@ -81,9 +86,11 @@
 #include "MT.h"
 #include "DHT11.h"
 #include "stdio.h"
+#include "stdint.h"
 #include "string.h"
 #include "IOT.h"
 #include "hal_adc.h"
+#include <stdlib.h>
 
 extern void LCD_P8x16Str(unsigned char x, unsigned char y,unsigned char ch[]);
 extern void HalLcdDisplayPercentBar( char *title, uint8 value );
@@ -97,6 +104,8 @@ extern void LCD_P16x16Ch(unsigned char x, unsigned char y, unsigned char N);
 /*********************************************************************
  * MACROS
  */
+static uint8 manualMode = 0; // 0为自动模式，1为手动模式
+static uint8 ledState = HAL_LED_MODE_OFF ; // LED灯状态，0为关闭，1为打开
 
 /*********************************************************************
  * CONSTANTS
@@ -105,6 +114,8 @@ extern void LCD_P16x16Ch(unsigned char x, unsigned char y, unsigned char N);
 /*********************************************************************
  * TYPEDEFS
  */
+
+
 
 /*********************************************************************
  * GLOBAL VARIABLES
@@ -155,7 +166,18 @@ byte GenericApp_TransID;  // This is the unique message ID (counter)
 
 afAddrType_t GenericApp_DstAddr;
 
-//byte sensorID = '1';
+// Pin assignments for sensors
+#define PHOTO_RESISTOR_PIN   P0_3
+#define PIR_SENSOR_PIN       P0_7
+#define LED_OFF 0
+#define LED_ON 1
+#define CMD_TOGGLE_LED  0x03
+static bool LEDState = false;
+// 定义三个LED灯的开关状态数组
+bool isLedOn[3] = {false, false, false}; // 默认都是关闭状态
+char strTemp[32]; // Define strTemp as a character array of size 32
+
+
 
 /*********************************************************************
  * LOCAL FUNCTIONS
@@ -166,8 +188,9 @@ static void GenericApp_MessageMSGCB( afIncomingMSGPacket_t *pckt );
 static void GenericApp_SendTheMessage( void );
 void UartInitPort0(void );
 static void rxCB(uint8 port,uint8 event);
-unsigned char GetADCMQ(void);
-unsigned char GetADCVol(void);
+unsigned char GetPhotoResistorReading(void);
+unsigned char GetPirSensorReading(void);
+
 
 #if defined( IAR_ARMCM3_LM )
 static void GenericApp_ProcessRtosMessage( void );
@@ -176,7 +199,9 @@ static void GenericApp_ProcessRtosMessage( void );
 /*********************************************************************
  * NETWORK LAYER CALLBACKS
  */
-
+extern uint8 autoMode;
+extern uint8_t mode;
+uint8_t uartState = AUTO_MODE;
 /*********************************************************************
  * PUBLIC FUNCTIONS
  */
@@ -185,26 +210,52 @@ static void GenericApp_ProcessRtosMessage( void );
 void UartInitPort0(void )
 {
 
-          halUARTCfg_t uartConfig;//顶一个串口结构体
-          uartConfig.configured             =TRUE;//串口配置为真
-          uartConfig.baudRate               =HAL_UART_BR_115200;//波特率为115200
-          uartConfig.flowControl            =FALSE;//流控制为假
-          uartConfig.callBackFunc       =    rxCB;
-          HalUARTOpen(HAL_UART_PORT_0,&uartConfig);// 打开串口0
+  halUARTCfg_t uartConfig; // 定义一个串口配置结构体
+  uartConfig.configured = TRUE; // 串口配置为真
+  uartConfig.baudRate = HAL_UART_BR_115200; // 波特率为115200
+  uartConfig.flowControl = FALSE; // 流控制为假
+  uartConfig.callBackFunc = rxCB; // 设置回调函数
+  HalUARTOpen(HAL_UART_PORT_0, &uartConfig); // 打开串口0
+  
+  // 配置P0_3和P0_7引脚
+  P0SEL &= ~(BV(3) | BV(7)); // 设置为GPIO模式
+  P0DIR &= ~(BV(3) | BV(7)); // 设置为输入模式
+  P0INP |= BV(3) | BV(7); // 设置为无上拉下拉
 }
-//下面这个回调函数是我加的，从串口0读取n个字符，放进uartbuf
-static void rxCB(uint8 port,uint8 event)
-{
 
-  unsigned char j=0,uartbuf[128]={0x00};
-  //HalUARTRead(0,uartbuf,1);
+// 下面这个回调函数是我加的，从串口0读取n个字符，放进uartbuf
+static void rxCB(uint8 port, uint8 event)
+{
+  // 定义一个数组，用于存储读取到的数据
+  static uint8_t uartbuf[3];
+  // 定义一个变量，用于记录当前读取到的数据个数
+  static uint8_t count = 0;
+  
   while (Hal_UART_RxBufLen(0)) //检测串口数据是否接收完成
   {
-    HalUARTRead (0,&uartbuf[j], 1);  //把数据接收放到buf中
-    j++;                           //记录字符数
-  } 
-  
+    // 读取一个字节
+    HalUARTRead(0, &uartbuf[count], 1);
+    count++;
+    // 当读取到两个字节后，将其封装成一个消息并发送
+    if (count == 2) {
+      uint8_t data[3] = {0x00, 0x00, 0x00};
+      data[0] = uartbuf[0];  // 第一个字节为传感器类型，0表示光敏电阻，1表示热释电红外
+      data[1] = uartbuf[1];  // 第二个字节为传感器输出的电平信号
+      
+      // 封装成一个AF数据包并发送给协调器
+      AF_DataRequest(&GenericApp_DstAddr, &GenericApp_epDesc,
+                     GENERICAPP_CLUSTERID, 3, data,
+                     &GenericApp_TransID, AF_DISCV_ROUTE,
+                     AF_DEFAULT_RADIUS);
+      
+      // 重置计数器和缓存数组
+      count = 0;
+      memset(uartbuf, 0, sizeof(uartbuf));
+    }
+  }
 }
+  
+
 /*********************************************************************
  * @fn      GenericApp_Init
  *
@@ -222,25 +273,30 @@ static void rxCB(uint8 port,uint8 event)
 void GenericApp_Init( uint8 task_id )
 {
  
+    // Store the task ID
   GenericApp_TaskID = task_id;
-  GenericApp_NwkState = DEV_INIT;
-  GenericApp_TransID = 0;
-  P1DIR|=0X03;//设置P10 P11端口输出
-  UartInitPort0();//初始化下串口，方便数据打印
-  // Device hardware initialization can be added here or in main() (Zmain.c).
-  // If the hardware is application specific - add it here.
-  // If the hardware is other parts of the device add it in main().
-  GenericApp_DstAddr.addrMode = (afAddrMode_t)Addr16Bit;//表明单播功能
-  GenericApp_DstAddr.endPoint = GENERICAPP_ENDPOINT;//发到协调器的对应的端点位置，此端点位置需要和协调器的端点位置保持一致
-  GenericApp_DstAddr.addr.shortAddr = 0x0000;//发送给网络端的协调器
+  
+  // Initialize LED pins
+  P1SEL &= ~0x03; // Set P1.0 and P1.1 as GPIO
+  P1DIR |= 0x03;  // Set P1.0 and P1.1 as outputs
+  P1 &= ~0x03;    // Set P1.0 and P1.1 to low
+  
+  // Initialize UART for debugging
+  UartInitPort0();
+  
 
+  
+  // Set up endpoint address for communication with coordinator
+  GenericApp_DstAddr.addrMode = (afAddrMode_t)Addr16Bit; // Set to unicast
+  GenericApp_DstAddr.endPoint = GENERICAPP_ENDPOINT;    // Set to endpoint of coordinator
+  GenericApp_DstAddr.addr.shortAddr = 0x0000;           // Set coordinator short address
+  
   // Fill out the endpoint description.
   GenericApp_epDesc.endPoint = GENERICAPP_ENDPOINT;
   GenericApp_epDesc.task_id = &GenericApp_TaskID;
-  GenericApp_epDesc.simpleDesc
-            = (SimpleDescriptionFormat_t *)&GenericApp_SimpleDesc;
+  GenericApp_epDesc.simpleDesc = (SimpleDescriptionFormat_t *)&GenericApp_SimpleDesc;
   GenericApp_epDesc.latencyReq = noLatencyReqs;
-
+  
   // Register the endpoint description with the AF
   afRegister( &GenericApp_epDesc );
 
@@ -252,9 +308,13 @@ void GenericApp_Init( uint8 task_id )
   HalLcdWriteString( "GenericApp", HAL_LCD_LINE_1 );
 #endif
 
+  // Register for ZDO messages
   ZDO_RegisterForZDOMsg( GenericApp_TaskID, End_Device_Bind_rsp );
   ZDO_RegisterForZDOMsg( GenericApp_TaskID, Match_Desc_rsp );
 
+  // Set device state to initialized
+  GenericApp_NwkState = DEV_INIT;
+  
 #if defined( IAR_ARMCM3_LM )
   // Register this task with RTOS task initiator
   RTOS_RegisterApp( task_id, GENERICAPP_RTOS_MSG_EVT );
@@ -335,6 +395,14 @@ uint16 GenericApp_ProcessEvent( uint8 task_id, uint16 events )
           }
           break;
 
+        case GENERICAPP_SEND_MSG_EVT: // 新增：处理GENERICAPP_SEND_MSG_EVT事件，调用数据采集发送函数
+          GenericApp_SendTheMessage();
+          osal_start_timerEx( GenericApp_TaskID,
+                              GENERICAPP_SEND_MSG_EVT,
+                              GENERICAPP_SEND_MSG_TIMEOUT + (osal_rand() & 0x00FF) * ENDNUM);
+                              // 修改：将发送时间间隔增加至 5s
+          break;
+
         default:
           break;
       }
@@ -349,34 +417,6 @@ uint16 GenericApp_ProcessEvent( uint8 task_id, uint16 events )
     // return unprocessed events
     return (events ^ SYS_EVENT_MSG);
   }
-
-  // Send a message out - This event is generated by a timer
-  //  (setup in GenericApp_Init()).
-  if ( events & GENERICAPP_SEND_MSG_EVT )
-  {
-    // Send "the" message
-    GenericApp_SendTheMessage();//数据采集发送函数
-    // Setup to send message again
-    osal_start_timerEx( GenericApp_TaskID,
-                        GENERICAPP_SEND_MSG_EVT,
-                        GENERICAPP_SEND_MSG_TIMEOUT+(osal_rand()&0x00FF)*ENDNUM  );//这里是间隔多久调用一次事件发送函数，GENERICAPP_SEND_MSG_TIMEOUT就是的，我们可以设定时间设置2s一次发数据
-
-    // return unprocessed events
-    return (events ^ GENERICAPP_SEND_MSG_EVT);
-  }
-
-  
-#if defined( IAR_ARMCM3_LM )
-  // Receive a message from the RTOS queue
-  if ( events & GENERICAPP_RTOS_MSG_EVT )
-  {
-    // Process message from RTOS queue
-    GenericApp_ProcessRtosMessage();
-
-    // return unprocessed events
-    return (events ^ GENERICAPP_RTOS_MSG_EVT);
-  }
-#endif
 
   // Discard unknown events
   return 0;
@@ -451,71 +491,87 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
  *
  * @return  none
  */
+
 static void GenericApp_HandleKeys( uint8 shift, uint8 keys )
 {
-  zAddrType_t dstAddr;
+ zAddrType_t dstAddr;
 
-  // Shift is used to make each button/switch dual purpose.
-  if ( shift )
+  if (uartState != KEY_RELEASE) // 检查是否按下按键
   {
-    if ( keys & HAL_KEY_SW_1 )
+    return;
+  }
+  
+  switch (keys)
+  {
+    case HAL_KEY_SW_1:
+      if (manualMode == 1) // 处于手动模式
+      {
+        // 切换LED灯状态
+        if (ledState == LED_OFF)
+        {
+          ledState = LED_ON;
+          HalLedSet(HAL_LED_1, HAL_LED_MODE_ON);
+          HalLedSet(HAL_LED_2, HAL_LED_MODE_ON);
+          HalLedSet(HAL_LED_3, HAL_LED_MODE_ON);
+        }
+        else
+        {
+          ledState = LED_OFF;
+          HalLedSet(HAL_LED_1, HAL_LED_MODE_OFF);
+          HalLedSet(HAL_LED_2, HAL_LED_MODE_OFF);
+          HalLedSet(HAL_LED_3, HAL_LED_MODE_OFF);
+        }
+      }
+      break;
+    case HAL_KEY_SW_2:
+      if (manualMode == 1) // 处于手动模式
+      {
+        // 切换手动模式和自动模式
+        manualMode = 0;
+        osal_start_timerEx(App_TaskID, GENERICAPP_AUTO_MODE_EVT, GENERICAPP_AUTO_MODE_TIMEOUT);
+        HalLedSet(HAL_LED_2, HAL_LED_MODE_ON);
+        // 向其他设备发送自动模式状态信息
+      }
+      else // 处于自动模式
+      {
+        // 切换自动模式和手动模式
+        manualMode = 1;
+        osal_stop_timerEx(App_TaskID, GENERICAPP_AUTO_MODE_EVT);
+        HalLedSet(HAL_LED_2, HAL_LED_MODE_OFF);
+        // 向其他设备发送手动模式状态信息
+      }
+      break;
+    default:
+      break;
+  }
+ // 在手动模式下，当按键操作执行后，不执行其他操作
+  if (manualMode == 1)
+  {
+    return;
+  }
+  // 自动模式下，当光照超过阈值时，关闭所有LED灯
+  if (manualMode == 0)
+  {
+    if (P0_3 == TRUE) // 光敏电阻传感器输出高电平
     {
-    }
-    if ( keys & HAL_KEY_SW_2 )
-    {
-    }
-    if ( keys & HAL_KEY_SW_3 )
-    {
-    }
-    if ( keys & HAL_KEY_SW_4 )
-    {
+      HalLedSet(HAL_LED_ALL, HAL_LED_MODE_OFF);
+      ledState = LED_OFF;
     }
   }
-  else
+
+  // 自动模式下，当有人经过时，所有LED灯都会亮起并发送信息
+  if (manualMode == 0 && P0_7 == TRUE) // 热释电红外传感器输出高电平
   {
-    if ( keys & HAL_KEY_SW_1 )
-    {
-      // Since SW1 isn't used for anything else in this application...
-#if defined( SWITCH1_BIND )
-      // we can use SW1 to simulate SW2 for devices that only have one switch,
-      keys |= HAL_KEY_SW_2;
-#elif defined( SWITCH1_MATCH )
-      // or use SW1 to simulate SW4 for devices that only have one switch
-      keys |= HAL_KEY_SW_4;
-#endif
-    }
+    HalLedSet(HAL_LED_ALL, HAL_LED_MODE_ON); // 所有LED灯都会亮起
 
-    if ( keys & HAL_KEY_SW_2 )
-    {
-      HalLedSet ( HAL_LED_4, HAL_LED_MODE_OFF );
-
-      // Initiate an End Device Bind Request for the mandatory endpoint
-      dstAddr.addrMode = Addr16Bit;
-      dstAddr.addr.shortAddr = 0x0000; // Coordinator
-      ZDP_EndDeviceBindReq( &dstAddr, NLME_GetShortAddr(),
-                            GenericApp_epDesc.endPoint,
-                            GENERICAPP_PROFID,
-                            GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
-                            GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
-                            FALSE );
-    }
-
-    if ( keys & HAL_KEY_SW_3 )
-    {
-    }
-
-    if ( keys & HAL_KEY_SW_4 )
-    {
-      HalLedSet ( HAL_LED_4, HAL_LED_MODE_OFF );
-      // Initiate a Match Description Request (Service Discovery)
-      dstAddr.addrMode = AddrBroadcast;
-      dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
-      ZDP_MatchDescReq( &dstAddr, NWK_BROADCAST_SHORTADDR,
-                        GENERICAPP_PROFID,
-                        GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
-                        GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
-                        FALSE );
-    }
+    // 发送信息给其他设备
+    dstAddr.addrMode = AddrBroadcast;
+    dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
+    ZDP_MatchDescReq(&dstAddr, NWK_BROADCAST_SHORTADDR,
+                     GENERICAPP_PROFID,
+                     GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
+                     GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
+                     FALSE);
   }
 }
 
@@ -537,29 +593,43 @@ static void GenericApp_HandleKeys( uint8 shift, uint8 keys )
 static void GenericApp_MessageMSGCB( afIncomingMSGPacket_t *pkt )
 {
 
-  switch ( pkt->clusterId )
+ switch ( pkt->clusterId )
   {
     case GENERICAPP_CLUSTERID:
       HalUARTWrite(0, pkt->cmd.Data, pkt->cmd.DataLength);  //输出接收到的数据,通过串口发送
-      if(pkt->cmd.Data[0]=='A')//1号灯
+      if(pkt->cmd.Data[0]=='1')//1号灯
       {
          if(pkt->cmd.Data[1]=='1')//开灯
-           HalLedSet(HAL_LED_1,HAL_LED_MODE_ON);
+         { isLedOn[0] = true;
+         HalLedSet(HAL_LED_1,HAL_LED_MODE_ON);}
          else
-           HalLedSet(HAL_LED_1,HAL_LED_MODE_OFF);
+         { isLedOn[0] = false;
+         HalLedSet(HAL_LED_1,HAL_LED_MODE_OFF);}
       }
-         if(pkt->cmd.Data[0]=='B')//2号灯
+         if(pkt->cmd.Data[0]=='2')//2号灯
       {
          if(pkt->cmd.Data[1]=='1')//开灯
-           HalLedSet(HAL_LED_2,HAL_LED_MODE_ON);
+         {isLedOn[1] = true;
+         HalLedSet(HAL_LED_2,HAL_LED_MODE_ON);}
          else
-           HalLedSet(HAL_LED_2,HAL_LED_MODE_OFF);
+         {isLedOn[1] = false;
+         HalLedSet(HAL_LED_2,HAL_LED_MODE_OFF);}
+      }
+      if(pkt->cmd.Data[0]=='3')//1号灯
+      {
+         if(pkt->cmd.Data[1]=='1')//开灯
+         {isLedOn[2] = true;
+         HalLedSet(HAL_LED_3,HAL_LED_MODE_ON);}
+         else
+         {isLedOn[2] = false;
+         HalLedSet(HAL_LED_3,HAL_LED_MODE_OFF);}
       }
      
 
 
       break;
   }
+
 
 }
 
@@ -588,200 +658,170 @@ static void GenericApp_MessageMSGCB( afIncomingMSGPacket_t *pkt )
 
 static void GenericApp_SendTheMessage( void )
 {
- unsigned char i,idstr[2],temp[4],humi[4],msg[10], strTemp[22];
- unsigned char volTemp[20];
- 
- memset(idstr,0,2);
- memset(temp,0,4);
- memset(humi,0,4);
- memset(strTemp,0,22);
- memset(msg,0,10);
-  
- DHT11_TEST();//温湿度 值
- 
- idstr[0] = ENDNUM + 0x30;
- idstr[1] = 0x00;
- temp[0]=wendu_shi+0x30;
- temp[1]=wendu_ge+0x30; 
- temp[2] = 0x00;
- humi[0]=shidu_shi+0x30;
- humi[1]=shidu_ge+0x30;
- humi[2]= 0x00;//把温湿度数据进行发送
-  
- osal_memcpy(strTemp,"id:", 3); 
- osal_memcpy(&strTemp[3],idstr, 1);
- osal_memcpy(&strTemp[4],"temp:", 5); 
- osal_memcpy(&strTemp[9],temp, 2);
- osal_memcpy(&strTemp[11],"humi:", 5);
- osal_memcpy(&strTemp[16],humi, 2);
- osal_memcpy(&strTemp[18],"\n", 1);
- 
- HalUARTWrite(0, "CSTX=>", 6);
- HalUARTWrite(0, strTemp, 19);
- HalUARTWrite(0, "\r\n",2);
-   //输出到LCD显示
-  for(i=0; i<3; i++)
-  {   
-    if(i==0)
-    {
-      LCD_P16x16Ch(i*16,4,i*16);
-      LCD_P16x16Ch(i*16,6,(i+3)*16);
+ unsigned char idstr[2], msg[30];
+
+  memset(idstr, 0, 2);
+  memset(msg, 0, 30);
+
+  idstr[0] = ENDNUM + 0x30;
+  idstr[1] = 0x00;
+
+  // 根据LED灯状态设置消息内容
+  int ledCount = 0;
+  if (manualMode == 0) {
+    // 如果是自动模式，发送LED灯状态和设备在线信息
+    if (isLedOn[0]) {
+      osal_memcpy(msg, "LED1:ON,", 8);
+      ledCount++;
+    } else {
+      osal_memcpy(msg, "LED1:OFF,", 9);
     }
-    else
-    {
-      LCD_P16x16Ch(i*16,4,i*16);
-      LCD_P16x16Ch(i*16,6,i*16);        
+    if (isLedOn[1]) {
+      osal_memcpy(&msg[9], "LED2:ON,", 8);
+      ledCount++;
+    } else {
+      osal_memcpy(&msg[9], "LED2:OFF,", 9);
     }
-  } 
-  LCD_P8x16Str(44, 4, temp);
-  LCD_P8x16Str(44, 6, humi);
-  LCD_P8x16Str(88, 2, "ZB");
-  LCD_P8x16Str(106, 2,idstr);
-  
-  
-   msg[0]= ENDNUM;
-   msg[1]= wendu_shi*10+wendu_ge;
-   msg[2]= shidu_shi*10+shidu_ge;  
-   msg[3]= GetADCMQ();
-   msg[4]= 100-GetADCVol();
-   msg[5]= 55;
-   msg[6]= 0;
-      
-   //显示采集的ADC
-   memset(volTemp,0,20); 
-   sprintf((char *)volTemp,"ADC:%2d",msg[4]);
-   LCD_P8x16Str(80, 6, volTemp);   
-  
-   memset(volTemp,0,20); 
-   sprintf((char *)volTemp,"MQ:%2d",msg[3]);
-   LCD_P8x16Str(80, 4, volTemp);  
-  
-  if ( AF_DataRequest( &GenericApp_DstAddr, &GenericApp_epDesc,
-                       GENERICAPP_CLUSTERID,
-                       (byte)osal_strlen((char *)msg ) ,
-                       (byte *)&msg,
-                       &GenericApp_TransID,
-                       AF_DISCV_ROUTE, AF_DEFAULT_RADIUS ) == afStatus_SUCCESS )
-  {
-    // Successfully requested to be sent.
-  }
-  else
-  {
-    // Error occurred in request to send.
-  }
-  LED1=!LED1;
-}
-
-
-/**********************************************************************/
-//通道5获取ADC值  
-unsigned char percentADCMQ=0;//百分比的整数值
-unsigned char GetADCMQ(void)
-{
-  uint16 adc=0;
-  float vol=0.0; //adc采样电压  
-  //unsigned char volTemp[20];
-
-  //读MQ2浓度 得到0-8192
-  adc= HalAdcRead(HAL_ADC_CHANNEL_5, HAL_ADC_RESOLUTION_14);
-
-  //最大采样值8192(因为最高位是符号位)
-  //2的13次方=8192
-  if(adc>=8192)
-  {
-    return 0;
-  }
-
-  //转化为百分比 8189/8192=0.9996
-  vol=(float)((float)adc)/8192.0;
-     
-  //取百分比两位数字
-  percentADCMQ=(int)(vol*100);
-  if(percentADCMQ<10)
-    percentADCMQ=1;
-  if(percentADCMQ>99)
-     percentADCMQ=99;
-  //memset(volTemp,0,20);
-  //sprintf((char *)volTemp,"MQ:%d",percentADCMQ);
-  //LCD_P8x16Str(80, 4, volTemp);
-  
-  return percentADCMQ;
-}
-
-unsigned char percentVOL=0;//百分比的整数值
-unsigned char GetADCVol(void)
-{
-  uint16 adc=0;
-  float vol=0.0; //adc采样电压  
-  //unsigned char volTemp[20];
-  //读MQ2浓度 0-8192
-  adc= HalAdcRead(HAL_ADC_CHANNEL_4, HAL_ADC_RESOLUTION_14);
-
-  //最大采样值8192(因为最高位是符号位)
-  //2的13次方=8192
-  if(adc>=8192)
-  {
-    return 0;
-  }
-
-  //转化为百分比 8189/8192=0.9996
-  vol=(float)((float)adc)/8192.0;
-     
-  //取百分比两位数字
-  percentVOL=(int)(vol*100);
-  if(percentVOL<10)
-    percentVOL=1;
-  if(percentVOL>99)
-     percentVOL=99;
-  //sprintf((char *)volTemp,"ADC:%d",percentVOL);
-  //LCD_P8x16Str(80, 6, volTemp);
-  
-  return percentVOL;
-}
-
-/**********************************************************************/
-
-#if defined( IAR_ARMCM3_LM )
-/*********************************************************************
- * @fn      GenericApp_ProcessRtosMessage
- *
- * @brief   Receive message from RTOS queue, send response back.
- *
- * @param   none
- *
- * @return  none
- */
-static void GenericApp_ProcessRtosMessage( void )
-{
-  osalQueue_t inMsg;
-
-  if ( osal_queue_receive( OsalQueue, &inMsg, 0 ) == pdPASS )
-  {
-    uint8 cmndId = inMsg.cmnd;
-    uint32 counter = osal_build_uint32( inMsg.cbuf, 4 );
-
-    switch ( cmndId )
-    {
-      case CMD_INCR:
-        counter += 1;  /* Increment the incoming counter */
-                       /* Intentionally fall through next case */
-
-      case CMD_ECHO:
-      {
-        userQueue_t outMsg;
-
-        outMsg.resp = RSP_CODE | cmndId;  /* Response ID */
-        osal_buffer_uint32( outMsg.rbuf, counter );    /* Increment counter */
-        osal_queue_send( UserQueue1, &outMsg, 0 );  /* Send back to UserTask */
-        break;
+    if (isLedOn[2]) {
+      osal_memcpy(&msg[18], "LED3:ON,AUTO", 13);
+      ledCount++;
+    } else {
+      osal_memcpy(&msg[18], "LED3:OFF,AUTO", 14);
+    }
+  } else {
+    // 如果是手动模式，根据LED灯状态设置消息内容和亮起的LED数量
+    if (isLedOn[0]) {
+      osal_memcpy(msg, "LED1:ON,", 8);
+      ledCount++;
+    } else {
+      osal_memcpy(msg, "LED1:OFF,", 9);
+    }
+    if (isLedOn[1]) {
+      osal_memcpy(&msg[9], "LED2:ON,", 8);
+      ledCount++;
+    } else {
+      osal_memcpy(&msg[9], "LED2:OFF,", 9);
+    }
+    osal_memcpy(&msg[18], "LED3:", 5);
+    if (isLedOn[2]) {
+      osal_memcpy(&msg[23], "ON,MANUAL", 9);
+      ledCount++;
+    } else {
+      osal_memcpy(&msg[23], "OFF,MANUAL", 10);
+    }
+    // 根据LED状态设置消息内容
+    if (manualMode == 0) {
+      // 如果是自动模式，发送LED灯状态和设备在线信息
+      if (LEDState) {
+        osal_memcpy(msg, "LED:ON,AUTO", 11);
+      } else {
+        osal_memcpy(msg, "LED:OFF,AUTO", 12);
       }
-      
-      default:
-        break;  /* Ignore unknown command */    
-    }
-  }
+    } else {
+      // 如果是手动模式，根据LED状态设置消息内容
+      if (LEDState) {
+        osal_memcpy(msg, "LED:ON,MANUAL", 13);
+      } else {
+        osal_memcpy(msg, "LED:OFF,MANUAL", 14);
+      }
 }
-#endif
+
+  }
+
+  // 将消息内容和设备ID组合成一个完整的消息
+   osal_memcpy(strTemp, "id:", 3);
+  osal_memcpy(&strTemp[3], idstr, 1);
+  osal_memcpy(&strTemp[4], "msg:", 5);
+  osal_memcpy(&strTemp[9], msg, osal_strlen((char *)msg));
+  osal_memcpy(&strTemp[9 + osal_strlen((char *)msg)], ",LEDCount:", 10);
+  osal_memcpy(&strTemp[19 + osal_strlen((char *)msg)], &ledCount, 1);
+  osal_memcpy(&strTemp[20 + osal_strlen((char *)msg)], "\n", 1);
+
+  // 将消息通过Zigbee协议发送出去
+  afAddrType_t dstAddr;
+memset(&dstAddr, 0, sizeof(afAddrType_t));
+dstAddr.addrMode = (afAddrMode_t)AddrBroadcast;
+dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
+
+uint16_t len = osal_strlen((char *)strTemp);
+uint8_t *buf = strTemp;
+uint8_t handle = 0; // 根据实际情况填写正确的handle
+AF_DataRequest(&dstAddr, &GenericApp_epDesc, GENERICAPP_CLUSTERID, len, buf, &GenericApp_TransID,
+               AF_DISCV_ROUTE, AF_DEFAULT_RADIUS);
+
+osal_mem_free(buf);
+ 
+}
+
+/**********************************************************************/
+
+//static void GenericApp_ProcessRtosMessage( void )
+//{
+//  osalQueue_t inMsg;
+//
+//  if ( osal_queue_receive( OsalQueue, &inMsg, 0 ) == pdPASS )
+//  {
+//    uint8 cmndId = inMsg.cmnd;
+//    uint32 counter = osal_build_uint32( inMsg.cbuf, 4 );
+//
+//    switch ( cmndId )
+//    {
+//      case CMD_INCR:
+//        counter += 1;  /* Increment the incoming counter */
+//                       /* Intentionally fall through next case */
+//
+//      case CMD_ECHO:
+//      {
+//        userQueue_t outMsg;
+//
+//        outMsg.resp = RSP_CODE | cmndId;  /* Response ID */
+//        osal_buffer_uint32( outMsg.rbuf, counter );    /* Increment counter */
+//        osal_queue_send( UserQueue1, &outMsg, 0 );  /* Send back to UserTask */
+//        break;
+//      }
+//      
+//      case CMD_AUTO_MODE:
+//      {
+//        userQueue_t outMsg;
+//        uint8_t status = inMsg.cbuf[0];
+//
+//        // 设置自动模式标志位
+//        if (status == 1) {
+//          isAutoMode = true;
+//        } else {
+//          isAutoMode = false;
+//        }
+//
+//        // 向协调器发送设备状态信息
+//        outMsg.resp = RSP_CODE | CMD_DEVICE_STATUS;
+//        osal_buffer_uint32(outMsg.rbuf, status);
+//        osal_queue_send(CoordQueue, &outMsg, 0);
+//        break;
+//      }
+//      
+//    case CMD_TOGGLE_LED:
+//      {
+//        // 切换LED状态
+//        LEDState = !LEDState;
+//        
+//        // 向协调器发送设备状态信息
+//        userQueue_t outMsg;
+//        outMsg.resp = RSP_CODE | CMD_DEVICE_STATUS;
+//        osal_buffer_uint32(outMsg.rbuf, LEDState);
+//        osal_queue_send(CoordQueue, &outMsg, 0);
+//        
+//        // 发送更新后的LED状态到其他设备
+//        GenericApp_SendTheMessage();
+//        
+//        break;
+//      }
+//      
+//
+//      default:
+//        break;  /* Ignore unknown command */    
+//    }
+//  }
+//}
 
 /*********************************************************************
  */
