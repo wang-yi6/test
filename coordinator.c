@@ -498,61 +498,6 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
         }
       }
       break;
-      
-      case PHOTOCELL_CLUSTERID:
-      {
-        zclReadRsp_t *readRsp = (zclReadRsp_t *)inMsg->asdu;
-        if (readRsp->numAttributes == 1 && readRsp->attrList[0].status == ZCL_STATUS_SUCCESS)
-        {
-          uint16_t photocell_value = BUILD_UINT16(readRsp->attrList[0].data[1], readRsp->attrList[0].data[0]);
-
-          // 根据光照强度自动控制 LED 灯
-          if (GenericApp_Mode == AUTO_MODE)
-          {
-            if (photocell_value == 0)
-            {
-              // 光照弱，开启所有灯
-              P1 |= BV(0);
-              P1 |= BV(1);
-            }
-            else if (photocell_value == 1)
-            {
-              // 光照强，关闭所有灯
-              P1 &= ~BV(0);
-              P1 &= ~BV(1);
-            }
-          }
-
-          // 如果当前节点为协调器并且检测到运动，控制自身 LED 灯
-          if (GenericApp_MyEndpoint == COORDINATOR_ENDPOINT && motion_value == 1)
-          {
-            P1 ^= BV(2); // LED2 取反
-          }
-        }
-      }
-      break;
-    case OCCUPANCY_CLUSTERID:
-      {
-        zclReadRsp_t *readRsp = (zclReadRsp_t *)inMsg->asdu;
-        if (readRsp->numAttributes == 1 && readRsp->attrList[0].status == ZCL_STATUS_SUCCESS)
-        {
-          uint8_t occupancy_value = readRsp->attrList[0].data[0];
-
-          // 根据运动状态控制 LED 灯
-          if (GenericApp_Mode == MANUAL_MODE)
-          {
-            if (occupancy_value == 1)
-            {
-              P1 |= BV(2); // LED2 开
-            }
-            else if (occupancy_value == 0)
-            {
-              P1 &= ~BV(2); // LED2 关
-            }
-          }
-        }
-      }
-      break;
   }
 }
 
