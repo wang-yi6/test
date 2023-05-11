@@ -1,61 +1,4 @@
-/******************************************************************************
-  Filename:       GenericApp.c
-  Revised:        $Date: 2012-03-07 01:04:58 -0800 (Wed, 07 Mar 2012) $
-  Revision:       $Revision: 29656 $
 
-  Description:    Generic Application (no Profile).
-
-
-  Copyright 2004-2012 Texas Instruments Incorporated. All rights reserved.
-
-  IMPORTANT: Your use of this Software is limited to those specific rights
-  granted under the terms of a software license agreement between the user
-  who downloaded the software, his/her employer (which must be your employer)
-  and Texas Instruments Incorporated (the "License"). You may not use this
-  Software unless you agree to abide by the terms of the License. The License
-  limits your use, and you acknowledge, that the Software may not be modified,
-  copied or distributed unless embedded on a Texas Instruments microcontroller
-  or used solely and exclusively in conjunction with a Texas Instruments radio
-  frequency transceiver, which is integrated into your product. Other than for
-  the foregoing purpose, you may not use, reproduce, copy, prepare derivative
-  works of, modify, distribute, perform, display or sell this Software and/or
-  its documentation for any purpose.
-
-  YOU FURTHER ACKNOWLEDGE AND AGREE THAT THE SOFTWARE AND DOCUMENTATION ARE
-  PROVIDED 揂S IS?WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-  INCLUDING WITHOUT LIMITATION, ANY WARRANTY OF MERCHANTABILITY, TITLE,
-  NON-INFRINGEMENT AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL
-  TEXAS INSTRUMENTS OR ITS LICENSORS BE LIABLE OR OBLIGATED UNDER CONTRACT,
-  NEGLIGENCE, STRICT LIABILITY, CONTRIBUTION, BREACH OF WARRANTY, OR OTHER
-  LEGAL EQUITABLE THEORY ANY DIRECT OR INDIRECT DAMAGES OR EXPENSES
-  INCLUDING BUT NOT LIMITED TO ANY INCIDENTAL, SPECIAL, INDIRECT, PUNITIVE
-  OR CONSEQUENTIAL DAMAGES, LOST PROFITS OR LOST DATA, COST OF PROCUREMENT
-  OF SUBSTITUTE GOODS, TECHNOLOGY, SERVICES, OR ANY CLAIMS BY THIRD PARTIES
-  (INCLUDING BUT NOT LIMITED TO ANY DEFENSE THEREOF), OR OTHER SIMILAR COSTS.
-
-  Should you have any questions regarding your right to use this Software,
-  contact Texas Instruments Incorporated at www.TI.com.
-******************************************************************************/
-
-/*********************************************************************
-  This application isn't intended to do anything useful, it is
-  intended to be a simple example of an application's structure.
-
-  This application sends "Hello World" to another "Generic"
-  application every 5 seconds.  The application will also
-  receives "Hello World" packets.
-
-  The "Hello World" messages are sent/received as MSG type message.
-
-  This applications doesn't have a profile, so it handles everything
-  directly - itself.
-
-  Key control:
-    SW1:
-    SW2:  initiates end device binding
-    SW3:
-    SW4:  initiates a match description request
-*********************************************************************/
 
 /*********************************************************************
  * INCLUDES
@@ -117,6 +60,7 @@ static uint8 ledState = HAL_LED_MODE_OFF ; // LED灯状态，0为关闭，1为�
 
 
 
+
 /*********************************************************************
  * GLOBAL VARIABLES
  */
@@ -167,11 +111,13 @@ byte GenericApp_TransID;  // This is the unique message ID (counter)
 afAddrType_t GenericApp_DstAddr;
 
 // Pin assignments for sensors
-#define PHOTO_RESISTOR_PIN   P0_3
+#define PHOTO_RESISTOR_PIN   P0_4
 #define PIR_SENSOR_PIN       P0_7
 #define LED_OFF 0
 #define LED_ON 1
 #define CMD_TOGGLE_LED  0x03
+#define MAX_LEDS 3
+bool leds[MAX_LEDS]; // 声明一个存储 LED 灯状态的布尔类型数组
 static bool LEDState = false;
 // 定义三个LED灯的开关状态数组
 bool isLedOn[3] = {false, false, false}; // 默认都是关闭状态
@@ -205,6 +151,33 @@ uint8_t uartState = AUTO_MODE;
 /*********************************************************************
  * PUBLIC FUNCTIONS
  */
+void SendDeviceInfoToOtherDevices(uint8_t deviceInfo);
+
+void SendDeviceInfoToOtherDevices(uint8_t deviceInfo) {
+  // TODO: Implement the logic to send the device information to other devices
+  // You can use Zigbee protocol or any other communication method here
+  
+  // Example implementation using Zigbee
+  char buffer[10];
+  sprintf(buffer, "%d", deviceInfo);
+  afAddrType_t dstAddr;
+  memset(&dstAddr, 0, sizeof(afAddrType_t));
+  dstAddr.addrMode = (afAddrMode_t)AddrBroadcast;
+  dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
+
+  uint16_t len = strlen(buffer);
+  uint8_t* buf = (uint8_t*)buffer;
+  uint8_t handle = 0; // Replace with the correct handle value based on your actual implementation
+
+//  AF_DataRequest(&dstAddr, &GenericApp_epDesc, GENERICAPP_CLUSTERID, len, buf, &GenericApp_TransID,
+//                 AF_DISCV_ROUTE, AF_DEFAULT_RADIUS);
+  AF_DataRequest(&GenericApp_DstAddr, &GenericApp_epDesc,GENERICAPP_CLUSTERID, len,buf,&GenericApp_TransID, AF_DISCV_ROUTE,
+                     AF_DEFAULT_RADIUS);
+      
+
+  // Free the memory if dynamically allocated
+  // osal_mem_free(buf);
+}
 
 
 void UartInitPort0(void )
@@ -275,6 +248,12 @@ void GenericApp_Init( uint8 task_id )
  
     // Store the task ID
   GenericApp_TaskID = task_id;
+  HalLedSet(HAL_LED_1,HAL_LED_MODE_OFF);
+  HalLedSet(HAL_LED_2,HAL_LED_MODE_OFF);
+ 
+
+  // Add a new event for device startup
+  osal_set_event( task_id, START_DEVICE_EVT );
   
   // Initialize LED pins
   P1SEL &= ~0x03; // Set P1.0 and P1.1 as GPIO
@@ -491,6 +470,49 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
  *
  * @return  none
  */
+uint8_t CalculateDistance(void);
+
+uint8_t CalculateDistance(void) {
+  // 在这里实现计算距离的逻辑
+  // 根据与设备直接的距离确定LED灯数量
+  // 返回LED灯数量
+
+  // 示例：假设与设备直接的距离为distance，根据距离确定LED灯数量
+  // 在此处编写距离计算的逻辑
+  // 假设已知节点之间的连接关系，可以使用适当的数据结构（如邻接矩阵或邻接链表）表示网络拓扑结构
+
+  // 假设网络拓扑关系如下：
+  // 节点0：协调器
+  // 节点1：终端1
+  // 节点2：终端2
+  // 节点3：终端3
+  // 节点之间的连接关系为：0-1, 0-2, 2-3
+
+  // 在这个示例中，距离定义为通过的节点数，而不考虑具体的物理距离
+  // 可以根据实际情况修改距离的定义和计算逻辑
+
+  // 节点之间的连接关系可以使用邻接矩阵或邻接链表表示
+  // 这里使用一个简单的邻接矩阵来表示连接关系
+  uint8_t distance = 0;
+  uint8_t adjacencyMatrix[4][4] = {
+    { 0, 1, 1, 0 },
+    { 1, 0, 0, 0 },
+    { 1, 0, 0, 1 },
+    { 0, 0, 1, 0 }
+  };
+
+  // 遍历节点之间的连接关系，计算距离
+  for (uint8_t i = 0; i < 4; i++) {
+    for (uint8_t j = i + 1; j < 4; j++) {
+      if (adjacencyMatrix[i][j] == 1) {
+        distance++;
+      }
+    }
+  }
+
+  return distance;
+}
+
 
 static void GenericApp_HandleKeys( uint8 shift, uint8 keys )
 {
@@ -552,7 +574,7 @@ static void GenericApp_HandleKeys( uint8 shift, uint8 keys )
   // 自动模式下，当光照超过阈值时，关闭所有LED灯
   if (manualMode == 0)
   {
-    if (P0_3 == TRUE) // 光敏电阻传感器输出高电平
+    if (P0_4 == TRUE) // 光敏电阻传感器输出高电平
     {
       HalLedSet(HAL_LED_ALL, HAL_LED_MODE_OFF);
       ledState = LED_OFF;
@@ -560,18 +582,33 @@ static void GenericApp_HandleKeys( uint8 shift, uint8 keys )
   }
 
   // 自动模式下，当有人经过时，所有LED灯都会亮起并发送信息
-  if (manualMode == 0 && P0_7 == TRUE) // 热释电红外传感器输出高电平
+  if (manualMode == 0 &&P0_4 == TRUE &&P0_7 == TRUE) // 热释电红外传感器输出高电平
   {
     HalLedSet(HAL_LED_ALL, HAL_LED_MODE_ON); // 所有LED灯都会亮起
 
-    // 发送信息给其他设备
-    dstAddr.addrMode = AddrBroadcast;
-    dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
-    ZDP_MatchDescReq(&dstAddr, NWK_BROADCAST_SHORTADDR,
-                     GENERICAPP_PROFID,
-                     GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
-                     GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
-                     FALSE);
+//    // 发送信息给其他设备
+//    dstAddr.addrMode = AddrBroadcast;
+//    dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
+//    ZDP_MatchDescReq(&dstAddr, NWK_BROADCAST_SHORTADDR,
+//                     GENERICAPP_PROFID,
+//                     GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
+//                     GENERICAPP_MAX_CLUSTERS, (cId_t *)GenericApp_ClusterList,
+//                     FALSE);
+    // 发送信息给其他设备，根据与设备之间的距离递减亮起LED灯数量
+  dstAddr.addrMode = (afAddrMode_t)AddrBroadcast;
+  dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
+
+  // 根据距离递减LED灯数量并发送信息
+  uint8_t distance = CalculateDistance();  // 计算与设备之间的距离
+  uint8_t numLeds = MAX_LEDS - distance;    // 递减LED灯数量
+  if (numLeds > 0) {
+    for (uint8_t i = 0; i < numLeds; i++) {
+      HalLedSet(leds[i], HAL_LED_MODE_ON);
+    }
+  }
+
+  // 向其他设备发送信息
+  SendDeviceInfoToOtherDevices(numLeds);
   }
 }
 
@@ -593,44 +630,78 @@ static void GenericApp_HandleKeys( uint8 shift, uint8 keys )
 static void GenericApp_MessageMSGCB( afIncomingMSGPacket_t *pkt )
 {
 
- switch ( pkt->clusterId )
-  {
-    case GENERICAPP_CLUSTERID:
-      HalUARTWrite(0, pkt->cmd.Data, pkt->cmd.DataLength);  //输出接收到的数据,通过串口发送
-      if(pkt->cmd.Data[0]=='1')//1号灯
-      {
-         if(pkt->cmd.Data[1]=='1')//开灯
-         { isLedOn[0] = true;
-         HalLedSet(HAL_LED_1,HAL_LED_MODE_ON);}
-         else
-         { isLedOn[0] = false;
-         HalLedSet(HAL_LED_1,HAL_LED_MODE_OFF);}
-      }
-         if(pkt->cmd.Data[0]=='2')//2号灯
-      {
-         if(pkt->cmd.Data[1]=='1')//开灯
-         {isLedOn[1] = true;
-         HalLedSet(HAL_LED_2,HAL_LED_MODE_ON);}
-         else
-         {isLedOn[1] = false;
-         HalLedSet(HAL_LED_2,HAL_LED_MODE_OFF);}
-      }
-      if(pkt->cmd.Data[0]=='3')//1号灯
-      {
-         if(pkt->cmd.Data[1]=='1')//开灯
-         {isLedOn[2] = true;
-         HalLedSet(HAL_LED_3,HAL_LED_MODE_ON);}
-         else
-         {isLedOn[2] = false;
-         HalLedSet(HAL_LED_3,HAL_LED_MODE_OFF);}
-      }
-     
+// switch ( pkt->clusterId )
+//  {
+//    case GENERICAPP_CLUSTERID:
+//      HalUARTWrite(0, pkt->cmd.Data, pkt->cmd.DataLength);  //输出接收到的数据,通过串口发送
+//      if(pkt->cmd.Data[0]=='1')//1号灯
+//      {
+//         if(pkt->cmd.Data[1]=='1')//开灯
+//         { isLedOn[0] = true;
+//         HalLedSet(HAL_LED_1,HAL_LED_MODE_ON);}
+//         else
+//         { isLedOn[0] = false;
+//         HalLedSet(HAL_LED_1,HAL_LED_MODE_OFF);}
+//      }
+//         if(pkt->cmd.Data[0]=='2')//2号灯
+//      {
+//         if(pkt->cmd.Data[1]=='1')//开灯
+//         {isLedOn[1] = true;
+//         HalLedSet(HAL_LED_2,HAL_LED_MODE_ON);}
+//         else
+//         {isLedOn[1] = false;
+//         HalLedSet(HAL_LED_2,HAL_LED_MODE_OFF);}
+//      }
+//      if(pkt->cmd.Data[0]=='3')//1号灯
+//      {
+//         if(pkt->cmd.Data[1]=='1')//开灯
+//         {isLedOn[2] = true;
+//         HalLedSet(HAL_LED_3,HAL_LED_MODE_ON);}
+//         else
+//         {isLedOn[2] = false;
+//         HalLedSet(HAL_LED_3,HAL_LED_MODE_OFF);}
+//      }
+//     
+//
+//
+//      break;
+//  }
+  if (pkt->clusterId == GENERICAPP_CLUSTERID) {
+  HalUARTWrite(0, pkt->cmd.Data, pkt->cmd.DataLength);
 
-
-      break;
+  // 根据接收到的数据进行相应操作
+  if (pkt->cmd.Data[0] == '1') {
+    if (pkt->cmd.Data[1] == '1') {
+      isLedOn[0] = true;
+      HalLedSet(HAL_LED_1, HAL_LED_MODE_ON);
+    } else {
+      isLedOn[0] = false;
+      HalLedSet(HAL_LED_1, HAL_LED_MODE_OFF);
+    }
   }
 
+  if (pkt->cmd.Data[0] == '2') {
+    if (pkt->cmd.Data[1] == '1') {
+      isLedOn[1] = true;
+      HalLedSet(HAL_LED_2, HAL_LED_MODE_ON);
+    } else {
+      isLedOn[1] = false;
+      HalLedSet(HAL_LED_2, HAL_LED_MODE_OFF);
+    }
+  }
 
+  if (pkt->cmd.Data[0] == '3') {
+    if (pkt->cmd.Data[1] == '1') {
+      isLedOn[2] = true;
+      HalLedSet(HAL_LED_3, HAL_LED_MODE_ON);
+    } else {
+      isLedOn[2] = false;
+      HalLedSet(HAL_LED_3, HAL_LED_MODE_OFF);
+
+
+}
+  }
+  }
 }
 
 /*********************************************************************
