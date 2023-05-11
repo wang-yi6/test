@@ -1,61 +1,4 @@
-/******************************************************************************
-  Filename:       GenericApp.c
-  Revised:        $Date: 2012-03-07 01:04:58 -0800 (Wed, 07 Mar 2012) $
-  Revision:       $Revision: 29656 $
 
-  Description:    Generic Application (no Profile).
-
-
-  Copyright 2004-2012 Texas Instruments Incorporated. All rights reserved.
-
-  IMPORTANT: Your use of this Software is limited to those specific rights
-  granted under the terms of a software license agreement between the user
-  who downloaded the software, his/her employer (which must be your employer)
-  and Texas Instruments Incorporated (the "License"). You may not use this
-  Software unless you agree to abide by the terms of the License. The License
-  limits your use, and you acknowledge, that the Software may not be modified,
-  copied or distributed unless embedded on a Texas Instruments microcontroller
-  or used solely and exclusively in conjunction with a Texas Instruments radio
-  frequency transceiver, which is integrated into your product. Other than for
-  the foregoing purpose, you may not use, reproduce, copy, prepare derivative
-  works of, modify, distribute, perform, display or sell this Software and/or
-  its documentation for any purpose.
-
-  YOU FURTHER ACKNOWLEDGE AND AGREE THAT THE SOFTWARE AND DOCUMENTATION ARE
-  PROVIDED 揂S IS?WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-  INCLUDING WITHOUT LIMITATION, ANY WARRANTY OF MERCHANTABILITY, TITLE,
-  NON-INFRINGEMENT AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL
-  TEXAS INSTRUMENTS OR ITS LICENSORS BE LIABLE OR OBLIGATED UNDER CONTRACT,
-  NEGLIGENCE, STRICT LIABILITY, CONTRIBUTION, BREACH OF WARRANTY, OR OTHER
-  LEGAL EQUITABLE THEORY ANY DIRECT OR INDIRECT DAMAGES OR EXPENSES
-  INCLUDING BUT NOT LIMITED TO ANY INCIDENTAL, SPECIAL, INDIRECT, PUNITIVE
-  OR CONSEQUENTIAL DAMAGES, LOST PROFITS OR LOST DATA, COST OF PROCUREMENT
-  OF SUBSTITUTE GOODS, TECHNOLOGY, SERVICES, OR ANY CLAIMS BY THIRD PARTIES
-  (INCLUDING BUT NOT LIMITED TO ANY DEFENSE THEREOF), OR OTHER SIMILAR COSTS.
-
-  Should you have any questions regarding your right to use this Software,
-  contact Texas Instruments Incorporated at www.TI.com.
-******************************************************************************/
-
-/*********************************************************************
-  This application isn't intended to do anything useful, it is
-  intended to be a simple example of an application's structure.
-
-  This application sends "Hello World" to another "Generic"
-  application every 5 seconds.  The application will also
-  receives "Hello World" packets.
-
-  The "Hello World" messages are sent/received as MSG type message.
-
-  This applications doesn't have a profile, so it handles everything
-  directly - itself.
-
-  Key control:
-    SW1:
-    SW2:  initiates end device binding
-    SW3:
-    SW4:  initiates a match description request
-*********************************************************************/
 
 /*********************************************************************
  * INCLUDES
@@ -75,6 +18,8 @@
 #include "zcl_general.h"
 
 
+
+
 #if !defined( WIN32 )
   #include "OnBoard.h"
 #endif
@@ -85,6 +30,7 @@
 #include "hal_led.h"
 #include "hal_key.h"
 #include "hal_uart.h"
+#include "hal_defs.h"
 #include "IOT.h"
 #include <string.h>
 #include <stdio.h>
@@ -107,6 +53,8 @@ uint8 keysPressed;
 extern uint8 autoMode;
 extern uint8_t mode;
 uint8_t uartState = AUTO_MODE;
+static uint8 manualMode = 0; // 0为自动模式，1为手动模式
+static uint8 ledState = HAL_LED_MODE_OFF ; // LED灯状态，0为关闭，1为打开
 
 
 
@@ -132,18 +80,30 @@ typedef struct {
 /*********************************************************************
  * TYPEDEFS
  */
-#define LIGHT_SENSOR_PORT    P0
-#define LIGHT_SENSOR_PIN     BV(4)
-#define MOTION_SENSOR_PORT   P0
-#define MOTION_SENSOR_PIN    BV(7)
+//#define LIGHT_SENSOR_PORT    P0
+//#define LIGHT_SENSOR_PIN     BV(4)
+//#define MOTION_SENSOR_PORT   P0
+//#define MOTION_SENSOR_PIN    BV(7)
+#define PHOTO_RESISTOR_PIN   P0_4
+#define PIR_SENSOR_PIN       P0_7
 #define KEYS_BLINK_LED      0x01
 #define KEYS_SEND_MSG       0x02
 #define KEYS_JOIN_REQ       0x04
 #define KEYS_DISCOVERY_REQ  0x08
 #define LED_OFF 0
 #define LED_ON 1
-#define PIR_CLUSTERID 0x1234
 #define ZCL_ON_OFF
+#define COORDINATOR_PHOTOCELL_CLUSTERID   0x0001
+#define COORDINATOR_PIR_CLUSTERID         0x0002
+#define SAMPLE_SENSOR_EVT 0x8000
+#define MAX_LEDS 3
+bool leds[MAX_LEDS]; // 声明一个存储 LED 灯状态的布尔类型数组
+static bool LEDState = false;
+// 定义三个LED灯的开关状态数组
+bool isLedOn[3] = {false, false, false}; // 默认都是关闭状态
+char strTemp[32]; // Define strTemp as a character array of size 32
+
+
 
 
 
@@ -218,6 +178,7 @@ static void GenericApp_ProcessRtosMessage( void );
  */
 
 
+
 /****************************************************************************
 * 名    称: ReSetMODULE()
 * 功    能: 低电平复位4g nbiot模块
@@ -233,7 +194,33 @@ void ReSetMODULE(void)
   MODULERESET = 1;                  //高电平工作------------
   Delay_ms(2000);
 }
+void SendDeviceInfoToOtherDevices(uint8_t deviceInfo);
 
+void SendDeviceInfoToOtherDevices(uint8_t deviceInfo) {
+  // TODO: Implement the logic to send the device information to other devices
+  // You can use Zigbee protocol or any other communication method here
+  
+  // Example implementation using Zigbee
+  char buffer[10];
+  sprintf(buffer, "%d", deviceInfo);
+  afAddrType_t dstAddr;
+  memset(&dstAddr, 0, sizeof(afAddrType_t));
+  dstAddr.addrMode = (afAddrMode_t)AddrBroadcast;
+  dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
+
+  uint16_t len = strlen(buffer);
+  uint8_t* buf = (uint8_t*)buffer;
+  uint8_t handle = 0; // Replace with the correct handle value based on your actual implementation
+
+//  AF_DataRequest(&dstAddr, &GenericApp_epDesc, GENERICAPP_CLUSTERID, len, buf, &GenericApp_TransID,
+//                 AF_DISCV_ROUTE, AF_DEFAULT_RADIUS);
+  AF_DataRequest(&GenericApp_DstAddr, &GenericApp_epDesc,GENERICAPP_CLUSTERID, len,buf,&GenericApp_TransID, AF_DISCV_ROUTE,
+                     AF_DEFAULT_RADIUS);
+      
+
+  // Free the memory if dynamically allocated
+  // osal_mem_free(buf);
+}
 
 /*********************************************************************
  * PUBLIC FUNCTIONS
@@ -273,27 +260,28 @@ void GenericApp_Init( uint8 task_id )
   P1SEL &= 0x00;
   P1DIR |= 0xFF;
   P1 |= 0xFF; // Turn off all LEDs
+  HalUARTWrite(0,"初始化完毕\r\n", 13);
 
   // ...
 
   // Register GenericApp_Task task into the task list
   osal_set_event( task_id, START_DEVICE_EVT );
+ 
   
 
   
   ReSetMODULE();
-  LED2 = 1; //关灯
-  LED1 = 1;
+
   UartInitPort0();//初始化串口0打印调试信息
-  UartInitPort1(SerialCallBack);//初始化串口1对接4G或者NBIOT模块或者WiFi模块
-  IOT_Status.Status=0;
-  HalUARTWrite(0, "\r\n======CSTX-UART0 CSGSM======\r\n", 32);
-  osal_memset(tmp,0,10);
-  tmp[0] = HAL_UART_DMA+0x30;
-  tmp[1] = HAL_UART_ISR+0x30;
-  tmp[2] = HAL_UART_USB+0x30;
-  HalUARTWrite(0, tmp, 6);
-  //HalUARTWrite(1, "AT+RST\r\n", 8);
+//  UartInitPort1(SerialCallBack);//初始化串口1对接4G或者NBIOT模块或者WiFi模块
+//  IOT_Status.Status=0;
+//  HalUARTWrite(0, "\r\n======CSTX-UART0 CSGSM======\r\n", 32);
+//  osal_memset(tmp,0,10);
+//  tmp[0] = HAL_UART_DMA+0x30;
+//  tmp[1] = HAL_UART_ISR+0x30;
+//  tmp[2] = HAL_UART_USB+0x30;
+//  HalUARTWrite(0, tmp, 6);
+//  HalUARTWrite(1, "AT+RST\r\n", 8);
   
   
   GenericApp_DstAddr.addrMode = (afAddrMode_t)AddrBroadcast;
@@ -323,6 +311,28 @@ void GenericApp_Init( uint8 task_id )
   RTOS_RegisterApp( task_id, GENERICAPP_RTOS_MSG_EVT );
 #endif
 }
+// 定义全局变量用于存储上一次的传感器状态
+static uint8_t previous_pin4_state = 0;
+static uint8_t previous_pin7_state = 0;
+static void SampleSensor_CheckState(void)
+{
+  // 读取 P0_4 引脚的状态
+  uint8_t pin4_state = (P0 & BV(4)) != 0;
+
+  // 读取 P0_7 引脚的状态
+  uint8_t pin7_state = (P0 & BV(7)) != 0;
+
+  // 在这里进行传感器状态的检测和处理
+  // ...
+
+  // 如果 P0_4 或 P0_7 的电平发生变化，则触发 SAMPLE_SENSOR_EVT 事件
+  if ((pin4_state != previous_pin4_state) || (pin7_state != previous_pin7_state))
+  {
+    previous_pin4_state = pin4_state;
+    previous_pin7_state = pin7_state;
+    osal_set_event(GenericApp_TaskID, SAMPLE_SENSOR_EVT);
+  }
+}
 
 /*********************************************************************
  * @fn      GenericApp_ProcessEvent
@@ -337,11 +347,53 @@ void GenericApp_Init( uint8 task_id )
  *
  * @return  none
  */
+uint8_t CalculateDistance(void);
 
+uint8_t CalculateDistance(void) {
+  // 在这里实现计算距离的逻辑
+  // 根据与设备直接的距离确定LED灯数量
+  // 返回LED灯数量
+
+  // 示例：假设与设备直接的距离为distance，根据距离确定LED灯数量
+  // 在此处编写距离计算的逻辑
+  // 假设已知节点之间的连接关系，可以使用适当的数据结构（如邻接矩阵或邻接链表）表示网络拓扑结构
+
+  // 假设网络拓扑关系如下：
+  // 节点0：协调器
+  // 节点1：终端1
+  // 节点2：终端2
+  // 节点3：终端3
+  // 节点之间的连接关系为：0-1, 0-2, 2-3
+
+  // 在这个示例中，距离定义为通过的节点数，而不考虑具体的物理距离
+  // 可以根据实际情况修改距离的定义和计算逻辑
+
+  // 节点之间的连接关系可以使用邻接矩阵或邻接链表表示
+  // 这里使用一个简单的邻接矩阵来表示连接关系
+  uint8_t distance = 0;
+  uint8_t adjacencyMatrix[4][4] = {
+    { 0, 1, 1, 0 },
+    { 1, 0, 0, 0 },
+    { 1, 0, 0, 1 },
+    { 0, 0, 1, 0 }
+  };
+
+  // 遍历节点之间的连接关系，计算距离
+  for (uint8_t i = 0; i < 4; i++) {
+    for (uint8_t j = i + 1; j < 4; j++) {
+      if (adjacencyMatrix[i][j] == 1) {
+        distance++;
+      }
+    }
+  }
+
+  return distance;
+}
 uint16 GenericApp_ProcessEvent( uint8 task_id, uint16 events )
 {
   afIncomingMSGPacket_t *MSGpkt;
   afDataConfirm_t *afDataConfirm;
+  zAddrType_t dstAddr;
 
   // Data Confirmation message fields
   byte sentEP;
@@ -398,6 +450,8 @@ uint16 GenericApp_ProcessEvent( uint8 task_id, uint16 events )
                                 GENERICAPP_SEND_MSG_TIMEOUT );
           }
           break;
+        
+ 
 
         default:
           break;
@@ -413,24 +467,66 @@ uint16 GenericApp_ProcessEvent( uint8 task_id, uint16 events )
     // return unprocessed events
     return (events ^ SYS_EVENT_MSG);
   }
+// 检测 SAMPLE_SENSOR_EVT 事件
+  if (events & SAMPLE_SENSOR_EVT)
+  {
+    // 处理传感器状态的变化
+    SampleSensor_CheckState();
+    // 在手动模式下，当按键操作执行后，不执行其他操作
+  if (manualMode == 1) {
+    return (events ^ SAMPLE_SENSOR_EVT);
+  }
 
+  // 自动模式下，当光照超过阈值时，关闭所有LED灯
+  else{
+  if (P0_4 == TRUE) {
+    HalLedSet(HAL_LED_ALL, HAL_LED_MODE_OFF);
+    ledState = LED_OFF;
+    HalUARTWrite(0,"关闭所有灯\r\n", 13);
+  }
+
+  // 自动模式下，当有人经过时，所有LED灯都会亮起并发送信息
+  if (P0_4 == FALSE && P0_7 == TRUE) {
+    HalLedSet(HAL_LED_ALL, HAL_LED_MODE_ON);
+
+    dstAddr.addrMode = (afAddrMode_t)AddrBroadcast;
+    dstAddr.addr.shortAddr = NWK_BROADCAST_SHORTADDR;
+    HalUARTWrite(0,"打开所有灯\r\n", 13);
+
+    // 根据距离递减LED灯数量并发送信息
+    uint8_t distance = CalculateDistance();
+    uint8_t numLeds = MAX_LEDS - distance;
+    if (numLeds > 0) {
+      for (uint8_t i = 0; i < numLeds; i++) {
+        HalLedSet(leds[i], HAL_LED_MODE_ON);
+      }
+    }
+
+    // 向其他设备发送信息
+    SendDeviceInfoToOtherDevices(numLeds);
+  }
+  }
+
+    // 返回未处理的事件
+    return (events ^ SAMPLE_SENSOR_EVT);
+  }
   // Send a message out - This event is generated by a timer
   //  (setup in GenericApp_Init()).
-  if ( events & GENERICAPP_SEND_MSG_EVT )
-  {
-    
-    IOT_Init();                //IOT初始化获取链接卡号和注册状态
-    IOT_MQTTInit();            //IOT MQTT初始化 链接阿里云的初始化
-    isBUSY= !isBUSY;
-    GenericApp_SendTheMessage();//广播数据发送
-    
-    osal_start_timerEx( GenericApp_TaskID,
-                        GENERICAPP_SEND_MSG_EVT,
-                        GENERICAPP_SEND_MSG_TIMEOUT );
-
-    // return unprocessed events
-    return (events ^ GENERICAPP_SEND_MSG_EVT);
-  }
+//  if ( events & GENERICAPP_SEND_MSG_EVT )
+//  {
+//    
+//    IOT_Init();                //IOT初始化获取链接卡号和注册状态
+//    IOT_MQTTInit();            //IOT MQTT初始化 链接阿里云的初始化
+//    isBUSY= !isBUSY;
+//    GenericApp_SendTheMessage();//广播数据发送
+//    
+//    osal_start_timerEx( GenericApp_TaskID,
+//                        GENERICAPP_SEND_MSG_EVT,
+//                        GENERICAPP_SEND_MSG_TIMEOUT );
+//
+//    // return unprocessed events
+//    return (events ^ GENERICAPP_SEND_MSG_EVT);
+//  }
 
   
 #if defined( IAR_ARMCM3_LM )
@@ -505,77 +601,6 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
         }
       }
       break;
-      
-      case PHOTOCELL_CLUSTERID:
-{
-  afIncomingMSGPacket_t *pMsg = (afIncomingMSGPacket_t *)inMsg;
-  uint8 data = 0;
-
-  // get data from message
-  memcpy(&data, pMsg->cmd.Data, sizeof(uint8));
-
-
-  // handle data from photoresistor sensor
-  if (pMsg->srcAddr.addr.shortAddr == NLME_GetShortAddr())
-  {
-    if (data == 0x01) // light level is above threshold
-    {
-      // turn off all LEDs
-      HalLedSet(1, HAL_LED_MODE_OFF);
-      HalLedSet(2, HAL_LED_MODE_OFF);
-      HalLedSet(3, HAL_LED_MODE_OFF);
-    }
-    else if (data == 0x00) // light level is below threshold
-    {
-      // do nothing
-    }
-  }
-  break;
-}
-  case PIR_CLUSTERID:
-    {
-       afIncomingMSGPacket_t *pMsg = (afIncomingMSGPacket_t *)inMsg;
-    uint8 data = 0;
-
-    // get data from message
-    memcpy(&data, pMsg->cmd.Data, sizeof(uint8));
-
-    // handle data from PIR sensor
-    if (pMsg->srcAddr.addr.shortAddr == NLME_GetShortAddr())
-    {
-        if (data == 0x01) // motion detected
-        {
-            // turn on all LEDs
-            HalLedSet(1, HAL_LED_MODE_ON);
-            HalLedSet(2, HAL_LED_MODE_ON);
-            HalLedSet(3, HAL_LED_MODE_ON);
-
-            // send message to other devices
-            afAddrType_t dstAddr;
-            dstAddr.addr.shortAddr = GenericApp_DstAddr.addr.shortAddr;
-            dstAddr.addrMode = (afAddrMode_t)Addr16Bit;
-            dstAddr.endPoint = GENERICAPP_ENDPOINT;
-            dstAddr.panId = 0;
-
-            uint8 buf[1];
-            buf[0] = 0x03;
-
-            AF_DataRequest(&dstAddr, &GenericApp_epDesc,
-                ZCL_CLUSTER_ID_GEN_ON_OFF,
-                1, // numArgs
-                buf, // pArgs
-                &GenericApp_TransID,
-                AF_DISCV_ROUTE,
-                AF_DEFAULT_RADIUS);
-        }
-        else if (data == 0x00) // no motion detected
-        {
-            // do nothing
-        }
-    }
-    break;
-    }
-
   }
 }
 
@@ -593,10 +618,7 @@ static void GenericApp_ProcessZDOMsgs( zdoIncomingMsg_t *inMsg )
  *
  * @return  none
  */
-// 定义自动模式变量
-static uint8_t manualMode = 0;
-// 定义变量ledState
-static uint8_t ledState = LED_OFF;
+
 
 void GenericApp_HandleKeys( uint8 shift, uint8 keys )
 {
@@ -617,6 +639,7 @@ void GenericApp_HandleKeys( uint8 shift, uint8 keys )
           HalLedSet(HAL_LED_1, HAL_LED_MODE_ON);
           HalLedSet(HAL_LED_2, HAL_LED_MODE_ON);
           HalLedSet(HAL_LED_3, HAL_LED_MODE_ON);
+          HalUARTWrite(0,"打开所有灯\r\n", 13);
         }
         else
         {
@@ -624,6 +647,7 @@ void GenericApp_HandleKeys( uint8 shift, uint8 keys )
           HalLedSet(HAL_LED_1, HAL_LED_MODE_OFF);
           HalLedSet(HAL_LED_2, HAL_LED_MODE_OFF);
           HalLedSet(HAL_LED_3, HAL_LED_MODE_OFF);
+          HalUARTWrite(0,"关闭所有灯\r\n", 13);
         }
       }
       break;
@@ -634,6 +658,7 @@ void GenericApp_HandleKeys( uint8 shift, uint8 keys )
         manualMode = 0;
         osal_start_timerEx(App_TaskID, GENERICAPP_AUTO_MODE_EVT, GENERICAPP_AUTO_MODE_TIMEOUT);
         HalLedSet(HAL_LED_2, HAL_LED_MODE_ON);
+        HalUARTWrite(0,"切换自模式\r\n", 13);
         // 向其他设备发送自动模式状态信息
       }
       else // 处于自动模式
@@ -642,6 +667,7 @@ void GenericApp_HandleKeys( uint8 shift, uint8 keys )
         manualMode = 1;
         osal_stop_timerEx(App_TaskID, GENERICAPP_AUTO_MODE_EVT);
         HalLedSet(HAL_LED_2, HAL_LED_MODE_OFF);
+        HalUARTWrite(0,"切换手模式\r\n", 13);
         // 向其他设备发送手动模式状态信息
       }
       break;
